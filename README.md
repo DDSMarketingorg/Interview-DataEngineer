@@ -18,55 +18,60 @@ next. A small, well-reasoned change beats a large one.
 
 A previous engineer wrote this service. It is "working" in production.
 
-```js
-// server.js
-import express from "express";
-import twilio from "twilio";
-import { pms } from "./pms.js"; // practice-management system client (stub it)
+```python
+# server.py
+import json
+import os
+from datetime import datetime, timezone
 
-const app = express();
-app.use(express.json());
+from fastapi import FastAPI, Request
+from twilio.rest import Client
 
-const client = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
-const GHL_API_KEY = "pit-3f9c2e7a-51b0-4d6e-9a1f-REPLACE_ME";
+from pms import pms  # practice-management system client (stub it)
 
-// 1. GHL calls this when a new lead is created. We call the lead right away.
-app.post("/webhooks/ghl/lead", async (req, res) => {
-  const { contact } = req.body;
-  console.log("new lead", JSON.stringify(req.body));
+app = FastAPI()
+client = Client(os.environ["TWILIO_ACCOUNT_SID"], os.environ["TWILIO_AUTH_TOKEN"])
+GHL_API_KEY = "pit-3f9c2e7a-51b0-4d6e-9a1f-REPLACE_ME"
 
-  await client.calls.create({
-    to: contact.phone,
-    from: process.env.TWILIO_NUMBER,
-    twiml: `<Response>
-              <Say>Hi ${contact.firstName}, this is Bright Smile Dental calling about your request.</Say>
-              <Connect><Stream url="wss://agent.example.com/stream"/></Connect>
-            </Response>`,
-  });
 
-  res.sendStatus(200);
-});
+# 1. GHL calls this when a new lead is created. We call the lead right away.
+@app.post("/webhooks/ghl/lead")
+async def ghl_lead(req: Request):
+    body = await req.json()
+    contact = body["contact"]
+    print("new lead", json.dumps(body))
 
-// 2. The voice agent calls this tool during a live call.
-//    `args` are produced by the LLM.
-app.post("/tools/lookup_appointments", async (req, res) => {
-  const { phone } = req.body.args;
-  const appts = await pms.findAppointmentsByPhone(phone);
-  console.log("lookup", phone, appts);
-  res.json(appts);
-});
+    client.calls.create(
+        to=contact["phone"],
+        from_=os.environ["TWILIO_NUMBER"],
+        twiml=f"""<Response>
+            <Say>Hi {contact["firstName"]}, this is Bright Smile Dental calling about your request.</Say>
+            <Connect><Stream url="wss://agent.example.com/stream"/></Connect>
+        </Response>""",
+    )
+    return {"ok": True}
 
-// 3. The voice agent calls this tool to book. The LLM sends e.g. "2026-11-17 15:00".
-app.post("/tools/book_appointment", async (req, res) => {
-  const { patientId, slot } = req.body.args;
-  const appt = await pms.createAppointment(patientId, new Date(slot + "Z"));
-  res.json(appt);
-});
 
-app.listen(3000);
+# 2. The voice agent calls this tool during a live call.
+#    `args` are produced by the LLM.
+@app.post("/tools/lookup_appointments")
+async def lookup_appointments(req: Request):
+    body = await req.json()
+    phone = body["args"]["phone"]
+    appts = pms.find_appointments_by_phone(phone)
+    print("lookup", phone, appts)
+    return appts
+
+
+# 3. The voice agent calls this tool to book. The LLM sends e.g. "2026-11-17 15:00".
+@app.post("/tools/book_appointment")
+async def book_appointment(req: Request):
+    args = (await req.json())["args"]
+    slot = datetime.strptime(args["slot"], "%Y-%m-%d %H:%M").replace(tzinfo=timezone.utc)
+    return pms.create_appointment(args["patientId"], slot)
 ```
 
-Each request to `/tools/*` also carries `req.body.call`, set by our voice
+Each request to `/tools/*` also carries a `call` object, set by our voice
 platform (not by the LLM):
 
 ```json
@@ -82,8 +87,8 @@ platform (not by the LLM):
    you find, ranked by how much damage it could do, and say why. Think about
    security, patient privacy, reliability under retries and timeouts, and
    correctness.
-2. **Fix the top problems** in a runnable Node.js or Python version of this
-   service. Stub `pms` and Twilio; do not call real services.
+2. **Fix the top problems** in a runnable version of this service (Python;
+   Node.js is fine if you prefer). Stub `pms` and Twilio; do not call real services.
 3. **Write tests that prove your fixes.** At least one test should show an
    attack or failure that worked before your fix and fails after it.
 
@@ -98,7 +103,7 @@ Logs:
 
 ```
 2026-11-16T19:03:40Z call=CA881 clinic=clinic_42 tool=book_appointment args={"patientId":"p_88","slot":"2026-11-17 15:00"} status=200
-2026-11-16T19:03:41Z pms.createAppointment patient=p_88 start=2026-11-17T15:00:00.000Z
+2026-11-16T19:03:41Z pms.create_appointment patient=p_88 start=2026-11-17T15:00:00+00:00
 ```
 
 What is the root cause, what is the fix, which test would have caught it, and
