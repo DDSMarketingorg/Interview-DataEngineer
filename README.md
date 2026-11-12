@@ -1,196 +1,124 @@
-# Data Engineer Interview: AI Voice Agent in Production
+# Data Engineer Interview
 
-We run AI receptionists for dental clinics. A voice agent answers and places
-calls, looks up appointments and books them in the clinic's practice-management
-system (PMS). Leads arrive from GoHighLevel (GHL). Clinics use different PMSs,
-and we keep adding more.
+We run AI receptionists for dental clinics. Leads arrive from GoHighLevel
+(GHL), our voice agent calls them or answers their calls, and books
+appointments in the clinic's practice-management system (PMS). Every clinic's
+data arrives in a different shape, and we keep adding clinics and PMSs.
 
-This exercise is not about how much you build. It is about how you think:
-**finding what is wrong, making it simpler, proving it works, measuring what
-matters, and knowing when it breaks.**
+We want to know, per clinic and per marketing channel:
+**lead → called → booked by the AI → attended.**
 
-**Time box: about 3 hours.** Stop at 3 hours and write down what you would do
-next. A small, well-reasoned change beats a large one.
+This exercise is about how you think: **reading messy data before trusting it,
+building a pipeline that is simple and correct, proving the numbers, and running
+it in production.**
 
----
-
-## The code you are inheriting
-
-A previous engineer wrote this service. It is "working" in production.
-
-```python
-# server.py
-import json
-import os
-from datetime import datetime, timezone
-
-from fastapi import FastAPI, Request
-from twilio.rest import Client
-
-from pms import pms  # practice-management system client (stub it)
-
-app = FastAPI()
-client = Client(os.environ["TWILIO_ACCOUNT_SID"], os.environ["TWILIO_AUTH_TOKEN"])
-GHL_API_KEY = "pit-3f9c2e7a-51b0-4d6e-9a1f-REPLACE_ME"
-
-
-# 1. GHL calls this when a new lead is created. We call the lead right away.
-@app.post("/webhooks/ghl/lead")
-async def ghl_lead(req: Request):
-    body = await req.json()
-    contact = body["contact"]
-    print("new lead", json.dumps(body))
-
-    client.calls.create(
-        to=contact["phone"],
-        from_=os.environ["TWILIO_NUMBER"],
-        twiml=f"""<Response>
-            <Say>Hi {contact["firstName"]}, this is Bright Smile Dental calling about your request.</Say>
-            <Connect><Stream url="wss://agent.example.com/stream"/></Connect>
-        </Response>""",
-    )
-    return {"ok": True}
-
-
-# 2. The voice agent calls this tool during a live call.
-#    `args` are produced by the LLM.
-@app.post("/tools/lookup_appointments")
-async def lookup_appointments(req: Request):
-    body = await req.json()
-    phone = body["args"]["phone"]
-    appts = pms.find_appointments_by_phone(phone)
-    print("lookup", phone, appts)
-    return appts
-
-
-# 3. The voice agent calls this tool to book. The LLM sends e.g. "2026-11-17 15:00".
-@app.post("/tools/book_appointment")
-async def book_appointment(req: Request):
-    args = (await req.json())["args"]
-    slot = datetime.strptime(args["slot"], "%Y-%m-%d %H:%M").replace(tzinfo=timezone.utc)
-    return pms.create_appointment(args["patientId"], slot)
-```
-
-Each request to `/tools/*` also carries a `call` object, set by our voice
-platform (not by the LLM):
-
-```json
-{ "call": { "sid": "CA123", "clinicId": "clinic_42", "callerPhone": "+13055550123", "direction": "inbound" },
-  "args": { "phone": "+13055550123" } }
-```
+**Time box: about 3 hours of work.** Stop at 3 hours and write down what you
+would do next. A small, well-reasoned pipeline beats a large one.
 
 ---
 
-## Part 1: Debug and fix (about 75 min)
+## The data
 
-1. **Review the code as if it were a PR to production.** List every problem
-   you find, ranked by how much damage it could do, and say why. Think about
-   security, patient privacy, reliability under retries and timeouts, and
-   correctness.
-2. **Fix the top problems** in a runnable version of this service (Python;
-   Node.js is fine if you prefer). Stub `pms` and Twilio; do not call real services.
-3. **Write tests that prove your fixes.** At least one test should show an
-   attack or failure that worked before your fix and fails after it.
+Everything in `data/` is invented: two weeks for four clinics, plus a sample
+from a fifth.
 
-## Part 2: Debug a real complaint (about 15 min)
+| File | Format | What it is |
+|---|---|---|
+| `clinics.csv` | CSV | Clinic id, name, PMS, time zone, the clinic's id inside its PMS, and its GHL location id |
+| `ghl_leads.jsonl` | JSON lines | Leads from GHL forms and ads. Nested; `attribution` may be missing |
+| `calls.csv` | CSV | One row per call event from our voice platform. `started_at` is UTC. `outcome` is what the agent reported |
+| `appointments_dentrix.csv` | CSV | Appointment export from the two Dentrix clinics |
+| `appointments_opendental.csv` | CSV | Appointment export from the two Open Dental clinics. `apt_status`: 1 scheduled, 2 complete, 3 cancelled, 5 broken (no-show) |
+| `new_pms_sample.json` | JSON | A sample export from a new PMS we are adding next month (clinic in Denver). Timestamps are epoch milliseconds |
+
+The PMS exports were taken at midnight local time on 2026-11-12. These files
+are what real exports look like: they do not agree with each other on formats,
+ids, time zones or meaning. Some rows should not be counted.
+
+---
+
+## Part 1: Build the pipeline (about 90 min)
+
+1. **Load all five sources** into one clean model. Pick the tools you think fit
+   (Python, SQL, DuckDB, dbt, pandas... anything that runs locally).
+2. **Produce two tables:**
+   - per clinic: calls → booked by the AI → appointments due → attended;
+   - per clinic and marketing channel (`attribution.medium`): leads → called →
+     booked → attended.
+3. **Write tests** that would fail if the pipeline counted something wrong.
+4. **Write down every row you excluded or could not match, and why.** We care
+   more about which numbers you trust than the numbers themselves.
+
+## Part 2: Add a new PMS (about 25 min)
+
+Write the adapter for `new_pms_sample.json`, with a test, so the rest of your
+pipeline handles it without changes.
+
+- What is the smallest interface every PMS adapter must satisfy?
+- What in this sample would you ask the PMS vendor about before trusting it?
+
+## Part 3: Debug a complaint (about 15 min)
 
 A clinic in Florida (Eastern Time) writes:
 
-> "A patient asked the AI for Tuesday at 3 pm. She showed up at 3 pm, but our
-> schedule had her at 10 am."
+> "Your dashboard says your AI booked a patient for Tuesday at 10 am. She came
+> in at 3 pm, which is what she asked for."
 
-Logs:
+The booking-tool log:
 
 ```
 2026-11-16T19:03:40Z call=CA881 clinic=clinic_42 tool=book_appointment args={"patientId":"p_88","slot":"2026-11-17 15:00"} status=200
 2026-11-16T19:03:41Z pms.create_appointment patient=p_88 start=2026-11-17T15:00:00+00:00
 ```
 
-What is the root cause, what is the fix, which test would have caught it, and
-how many other patients might be affected? How would you find them?
+What is the root cause, which test would have caught it, and how would you find
+every other affected appointment in the data?
 
-## Part 3: Simplify (about 25 min, written)
+## Part 4: Run it in production (about 30 min, written)
 
-For the next phase, an engineer proposed this architecture:
+Someone proposed this stack for the pipeline: Kafka, Spark, Airflow, a
+Snowflake warehouse and dbt Cloud. Current volume: **about 200 calls and 150
+leads a week across 20 clinics. Two engineers.**
 
-- API gateway, lead-service, call-service, agent-service, booking-service,
-  notification-service, analytics-service (7 services, each with its own Postgres)
-- Kafka between every service
-- A Hadoop cluster for logs and alerting
-- Kubernetes for all of it
+1. Draw (ASCII is fine) the **simplest setup** you would run today: where it
+   runs, how often, and where the tables live. What would you delete from the
+   proposal, and at what volume would you add each piece back?
+2. **Reruns and late data:** a PMS export arrives a day late, or twice. How do
+   you make reruns safe and avoid double counting?
+3. **Feeds that break:** a PMS renames a column, or a clinic's export stops
+   arriving. How do you notice before a clinic notices? Where does the alert
+   go?
+4. **Patient data:** these files hold phone numbers and appointment times.
+   What do you keep, hash or drop, and who can see the raw files?
 
-Current load: **20 clinics, about 150 calls a week. Two engineers.**
+## Part 5: Prove a change worked (about 20 min, written)
 
-- Draw (ASCII is fine) the **simplest design** you would run today.
-- What do you delete, and what would break without each piece you keep?
-- At what concrete load or team size would you split something out, and what
-  would you split first?
+1. The dashboard will show your booking rate next to ad spend. **Name the two
+   most likely ways it could lie**, and how you would catch each.
+2. We change the agent's prompt to raise bookings. **How do you prove it raised
+   bookings?** What do you compare, over how many calls, and what would make
+   you roll it back?
 
-## Part 4: Know when it breaks (about 30 min)
-
-Last quarter, five clinics' voice agents silently stopped receiving calls.
-Nobody noticed for weeks. A cron job also crashed 34 times in one week and
-everyone ignored the alerts.
-
-1. **Build** a check that alerts when a clinic gets **zero calls during
-   business hours for 24 hours**, plus one more alert you think matters most.
-   Code plus a test is better than a description.
-2. **Write** (short): where alerts go, who owns them, and how you keep alerts
-   rare enough that people still read them.
-3. **One paragraph:** how would you prove a clinic's agent works end to end
-   *before* a patient finds out it does not?
-
-## Part 5: Measure the booking rate, and prove a change raised it (about 45 min)
-
-The folder `data/` holds two weeks of fake data for four clinics:
-
-| File | What it is |
-|---|---|
-| `clinics.csv` | Clinic id, name, which PMS it uses, its time zone, and its id inside that PMS |
-| `calls.csv` | One row per call event from our voice platform (`started_at` is UTC) |
-| `appointments_dentrix.csv` | Appointment export from two clinics on Dentrix |
-| `appointments_opendental.csv` | Appointment export from two clinics on Open Dental. `apt_status`: 1 scheduled, 2 complete, 3 cancelled, 5 broken (no-show) |
-
-Both PMS exports were taken at midnight local time on 2026-11-12 and use the
-clinic's local time. They are what real exports look like: they do not agree
-with each other or with our call log on formats, ids or meaning.
-
-1. **Build** one number per clinic: **calls → booked by the AI → attended.**
-   Code plus a test is better than a spreadsheet. Write down every row you
-   excluded or could not match, and why. We care more about which numbers you
-   trust than about the numbers themselves.
-2. A third PMS is coming next month, with its own format. **Show where that
-   difference lives in your code** so the rest of the system never sees it.
-   What is the smallest interface every PMS adapter must satisfy?
-3. The clinic dashboard will show this booking rate next to marketing data
-   (ad spend, website and search traffic). **What would make that dashboard
-   lie?** Name the two most likely ways, and how you would catch each one.
-4. We want to change the agent's system prompt to raise bookings. **How do you
-   prove it raised bookings without breaking other conversations?** What do
-   you compare, over how many calls, and how do you roll back?
+---
 
 ## Rules
 
 - **AI coding tools are welcome.** In the follow-up call you will walk us
-  through your change, and we will ask about any line of it.
+  through your work, and we will ask about any line of it.
 - **Fake data only.** Everything in `data/` is invented, including the phone
   numbers (555-01xx). Do not add real patient data, phone numbers or API keys.
-- Keep the change small. We read every line; we would rather read 200 good
-  ones than 2,000.
+- Keep it small. We read every line; we would rather read 200 good ones than
+  2,000.
 - If something is unclear, make a reasonable assumption and write it down.
 
 ## Deliverables
 
-1. Your code and tests, with a short way to run them (one command).
-2. `NOTES.md`, at most about two pages: your ranked problem list (Part 1), and
-   your answers to Parts 2 to 5, including the
-   per-clinic numbers from Part 5 and the rows you excluded.
-3. **Your AI session logs.** Export the chats or transcripts from whatever
-   tools you used (Claude Code, Cursor, Codex, ChatGPT...) and include them
-   unedited in an `ai-logs/` folder. Commit as you go rather than in one
-   commit at the end. We want to see how you work with these tools: what you
-   asked, what you accepted, what you rejected and why. Heavy AI use is fine;
-   we are judging the judgment, not the typing.
+1. Your code and tests, with one command to run them and print both tables.
+2. `NOTES.md`, at most about two pages: your excluded rows and assumptions
+   (Part 1), and your answers to Parts 2 to 5.
+3. **AI decisions**, a short section in `NOTES.md`: three to five suggestions
+   from your AI tools that you accepted or rejected, and why. Exported chat
+   logs are welcome but optional.
 
 ## Submission
 
@@ -198,5 +126,6 @@ with each other or with our call log on formats, ids or meaning.
 **private** repository with your solution and add the GitHub user we send you,
 or send a zip by email to sepi@vdsupport.com.
 
-**Deadline:** 12 hours after you receive this exercise. Plan on about 3 hours of
-work. A 30-minute follow-up call reviews it with you.
+**Deadline:** 72 hours after you receive this exercise. Plan on about 3 hours of
+work. A 60-minute follow-up call reviews it with you, including a small live
+change to your pipeline.

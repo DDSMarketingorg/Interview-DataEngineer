@@ -1,5 +1,5 @@
-clinic_id,name,pms,timezone,pms_clinic_ref
-clinic_11,Harbor View Dental,dentrix,America/New_York,CLINIC11
-clinic_12,Lakeside Family Dentistry,opendental,America/New_York,12
-clinic_13,Prairie Smile Studio,opendental,America/Chicago,13
-clinic_14,Desert Bloom Dental,dentrix,America/Phoenix,CLINIC14
+clinic_id,name,pms,timezone,pms_clinic_ref,ghl_location_id
+clinic_11,Harbor View Dental,dentrix,America/New_York,CLINIC11,ghlLoc65793467
+clinic_12,Lakeside Family Dentistry,opendental,America/New_York,12,ghlLoc27684208
+clinic_13,Prairie Smile Studio,opendental,America/Chicago,13,ghlLoc13818675
+clinic_14,Desert Bloom Dental,dentrix,America/Phoenix,CLINIC14,ghlLoc92756738

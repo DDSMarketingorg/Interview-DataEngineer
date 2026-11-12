@@ -1,0 +1,61 @@
+{
+  "practice": {
+    "code": "DEN-15"
+  },
+  "exported_at": 1794466800000,
+  "appointments": [
+    {
+      "id": "a1",
+      "patient": {
+        "mobile": "720-555-0111"
+      },
+      "start_ms": 1793721600000,
+      "created_ms": 1793390520000,
+      "state": "ARRIVED",
+      "origin": "voice_ai",
+      "duration_min": 60
+    },
+    {
+      "id": "a2",
+      "patient": {
+        "mobile": "+17205550112"
+      },
+      "start_ms": 1793831400000,
+      "created_ms": 1793553300000,
+      "state": "NO_SHOW",
+      "origin": "voice_ai",
+      "duration_min": 60
+    },
+    {
+      "id": "a3",
+      "patient": {
+        "mobile": "7205550113"
+      },
+      "start_ms": 1793890800000,
+      "created_ms": 1793637600000,
+      "state": "CANCELED",
+      "origin": "staff",
+      "duration_min": 60
+    },
+    {
+      "id": "a4",
+      "patient": {
+        "mobile": "720.555.0114"
+      },
+      "start_ms": 1795204800000,
+      "created_ms": 1794265500000,
+      "state": "BOOKED",
+      "origin": "voice_ai",
+      "duration_min": 60
+    },
+    {
+      "id": "a5",
+      "patient": {},
+      "start_ms": 1793984400000,
+      "created_ms": 1793728800000,
+      "state": "ARRIVED",
+      "origin": "staff",
+      "duration_min": 60
+    }
+  ]
+}
